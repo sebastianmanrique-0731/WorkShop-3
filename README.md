@@ -38,32 +38,6 @@ The pipeline transitions from traditional batch ETL processing to an event-drive
    - **Step 4 (Atomic Star Schema Persistence & Manual Offset Commit)**: Within a single PostgreSQL transaction, updates `raw_happiness_events` to `VALID`, upserts `dim_country` and `dim_date`, and upserts `fact_predictions` linked via `raw_event_id`. Only after `conn.commit()` succeeds does the consumer manually commit the Kafka offset.
 3. **Dashboard & KPIs (`sql/kpis.sql` + Power BI)**: Queries PostgreSQL directly to visualize the 4 core KPIs and contract audit metrics.
 
-### 2.3 Repository Folder Structure
-```text
-WorkShop-3/
-├── data/
-│   ├── raw/                        # Original historical CSVs (2015.csv - 2019.csv)
-│   ├── processed/                  # Harmonized dataset (happiness_unified.csv)
-│   └── streaming/                  # Emitted JSONL event stream snapshot
-├── notebooks/
-│   ├── eda.ipynb                   # Step 1 & Step 2: EDA, Data Cleaning & Harmonization
-│   └── model_training.ipynb        # Step 3 & Step 4: Feature Engineering & ML Training
-├── kafka/
-│   ├── producer.py                 # Step 5: Kafka Producer (happiness-events, 3 partitions)
-│   └── consumer.py                 # Step 6: Kafka Consumer (happiness-ml-team) + Contract Validation
-├── models/
-│   └── model.pkl                   # Serialized scikit-learn Pipeline (Imputer + Scaler + RF Regressor)
-├── sql/
-│   ├── create_tables.sql           # Step 7: Raw Table + Star Schema DDL + Power BI Views
-│   └── kpis.sql                    # Step 9: Analytical SQL queries for the required KPIs
-├── dashboards/                     # Power BI (.pbix) file and dashboard screenshots
-├── imagenes/
-│   └── architecture.jpg            # End-to-end architecture diagram (Part A, Part B, Part C)
-├── docker-compose.yml              # Zookeeper + Apache Kafka + PostgreSQL 15
-├── requirements.txt                # Python dependencies
-└── README.md                       # Mandatory project documentation
-```
-
 ---
 
 ## 3. Data Cleaning & Harmonization Decisions (Part A — Steps 1 & 2)
@@ -277,7 +251,36 @@ The dashboard queries **PostgreSQL (`happiness_db`) directly** (never CSV files)
 
 ---
 
-## 8. Execution Instructions
+## 8. Repository Folder Structure
+
+```text
+WorkShop-3/
+├── data/
+│   ├── raw/                        # Original historical CSVs (2015.csv - 2019.csv)
+│   ├── processed/                  # Harmonized dataset (happiness_unified.csv)
+│   └── streaming/                  # Emitted JSONL event stream snapshot
+├── notebooks/
+│   ├── eda.ipynb                   # Step 1 & Step 2: EDA, Data Cleaning & Harmonization
+│   └── model_training.ipynb        # Step 3 & Step 4: Feature Engineering & ML Training
+├── kafka/
+│   ├── producer.py                 # Step 5: Kafka Producer (happiness-events, 3 partitions)
+│   └── consumer.py                 # Step 6: Kafka Consumer (happiness-ml-team) + Contract Validation
+├── models/
+│   └── model.pkl                   # Serialized scikit-learn Pipeline (Imputer + Scaler + RF Regressor)
+├── sql/
+│   ├── create_tables.sql           # Step 7: Raw Table + Star Schema DDL + Power BI Views
+│   └── kpis.sql                    # Step 9: Analytical SQL queries for the required KPIs
+├── dashboards/                     # Power BI (.pbix) file and dashboard screenshots
+├── imagenes/
+│   └── architecture.jpg            # End-to-end architecture diagram (Part A, Part B, Part C)
+├── docker-compose.yml              # Zookeeper + Apache Kafka + PostgreSQL 15
+├── requirements.txt                # Python dependencies
+└── README.md                       # Mandatory project documentation
+```
+
+---
+
+## 9. Execution Instructions
 
 ### Step 1: Create & Activate Virtual Environment and Install Dependencies
 ```powershell
