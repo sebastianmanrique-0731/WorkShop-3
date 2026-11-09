@@ -170,57 +170,7 @@ The consumer (`group.id = happiness-ml-team`) implements five reliability guaran
 
 Defined in [`sql/create_tables.sql`](sql/create_tables.sql):
 
-```mermaid
-erDiagram
-    RAW_HAPPINESS_EVENTS ||--o| FACT_PREDICTIONS : "traced via raw_event_id"
-    DIM_COUNTRY ||--o{ FACT_PREDICTIONS : "country_id"
-    DIM_DATE ||--o{ FACT_PREDICTIONS : "date_id"
-
-    RAW_HAPPINESS_EVENTS {
-        serial raw_event_id PK
-        varchar event_id
-        varchar kafka_topic
-        int kafka_partition
-        bigint kafka_offset
-        varchar event_key
-        text raw_payload
-        timestamp event_time
-        timestamp ingested_at
-        varchar processing_status
-        text validation_errors
-    }
-
-    DIM_COUNTRY {
-        serial country_id PK
-        varchar country_name UK
-    }
-
-    DIM_DATE {
-        serial date_id PK
-        int observation_year UK
-        varchar decade
-    }
-
-    FACT_PREDICTIONS {
-        serial prediction_id PK
-        int raw_event_id FK
-        varchar event_id UK
-        int country_id FK
-        int date_id FK
-        float gdp
-        float family
-        float health
-        float freedom
-        float generosity
-        float corruption
-        float actual_score
-        float predicted_score
-        float prediction_error
-        boolean is_test_set
-        timestamp event_time
-        timestamp prediction_timestamp
-    }
-```
+![Dimensional Model — Star Schema & Raw Staging Table](imagenes/dimensional_model.png)
 
 - **Staging / Traceability Table (`raw_happiness_events`)**: Stores the exact raw Kafka payload, partition, offset, status, and validation error reason. Not a dimension table; serves auditing, debugging, and reprocessing.
 - **Dimensions (`dim_country`, `dim_date`)**: Normalized lookup tables for country (`164` countries) and observation year (`2015`–`2019`).
@@ -272,7 +222,8 @@ WorkShop-3/
 │   └── kpis.sql                    # Step 9: Analytical SQL queries for the required KPIs
 ├── dashboards/                     # Power BI (.pbix) file and dashboard screenshots
 ├── imagenes/
-│   └── architecture.jpg            # End-to-end architecture diagram (Part A, Part B, Part C)
+│   ├── architecture.jpg            # End-to-end architecture diagram (Part A, Part B, Part C)
+│   └── dimensional_model.png       # Star Schema & Raw Staging Table diagram
 ├── docker-compose.yml              # Zookeeper + Apache Kafka + PostgreSQL 15
 ├── requirements.txt                # Python dependencies
 └── README.md                       # Mandatory project documentation
