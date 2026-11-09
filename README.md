@@ -180,24 +180,84 @@ Defined in [`sql/create_tables.sql`](sql/create_tables.sql):
 
 ## 7. Dashboard & KPIs Explanation (Part C — Step 9)
 
-The dashboard queries **PostgreSQL (`happiness_db`) directly** (never CSV files) using the Star Schema tables and pre-built SQL views in [`sql/create_tables.sql`](sql/create_tables.sql) and [`sql/kpis.sql`](sql/kpis.sql):
+The **Power BI** report queries **PostgreSQL (`happiness_db` on `localhost:5432`) directly** (never CSV files) using the Star Schema (`fact_predictions`, `dim_country`, `dim_date`), the staging table (`raw_happiness_events`), and the analytical SQL views in [`sql/create_tables.sql`](sql/create_tables.sql) and [`sql/kpis.sql`](sql/kpis.sql).
 
-1. **KPI 1 — Average Prediction Error (`vw_kpi_summary`)**:
-   - Evaluates model accuracy in streaming production: reports `MAE` and `RMSE` both for the **30% Out-of-Sample Test Set (`MAE = 0.4071`, `RMSE = 0.5213`)** and across all `782` events (`MAE = 0.2197`).
-2. **KPI 2 — Predictions by Country (`vw_predictions_by_country`)**:
-   - Aggregates `avg_actual_score`, `avg_predicted_score`, and `avg_prediction_error` across all `164` countries (`dim_country`) for choropleth maps and Top/Bottom country rankings.
-3. **KPI 3 — Predicted vs. Actual Score (`vw_predicted_vs_actual`)**:
-   - Event-level comparison (`actual_score`, `predicted_score`, `residual_signed`, `prediction_error`, `dataset_split`) used for scatter plots ($y = \hat{y}$) and residual distribution analysis.
-4. **KPI 4 — Prediction Trends Over Time (`vw_prediction_trends_over_time`)**:
-   - Tracks average actual vs. predicted happiness scores and prediction error across historical years (`2015`–`2019` via `dim_date`) and real-time streaming ingestion windows (`prediction_timestamp`).
-5. **Audit KPI — Event Contract Validation (`vw_event_audit_status`)**:
-   - Displays pipeline health and contract enforcement (`782 VALID`, `2 INVALID_SCHEMA`, `1 INVALID_VALUES`, `1 PREDICTION_ERROR`).
+The dashboard is organized into **5 interactive analytical pages**:
 
-### Connecting Power BI Desktop to PostgreSQL
+---
+
+### 7.1 Page 1 — `Happiness · Error de predicción` (KPI 1: Average Prediction Error)
+![Dashboard Page 1 — Happiness Error de Predicción](<dashboards/Happines- Error de prediccion.png>)
+
+- **Executive KPI Cards**:
+  - **Predicciones (`782`)**: Total valid historical events scored and persisted in `fact_predictions`.
+  - **MAE Test (`0.407`)**: True out-of-sample Mean Absolute Error on the 30% held-out test set (`235` events), beating the `0.500` target threshold shown on the gauge chart.
+  - **MAE Todos los Eventos (`0.219`)**: Blended MAE across all `782` streamed records (`547` training + `235` test).
+  - **RMSE Test (`0.521`) & $R^2$ Test (`0.782`)**: Confirms that the 6 socioeconomic features explain **78.23%** of the variance in unseen happiness scores.
+  - **Eventos Válidos (`99.5%`)**: `782` valid predictions out of `786` total Kafka messages received.
+- **Visual Analysis**:
+  - **Calidad de predicción (`Train vs Test`)**: Breaks down predictions into 4 error bands (`1 · Excelente < 0.25`, `2 · Bueno 0.25–0.50`, `3 · Regular 0.50–0.75`, `4 · Malo >= 0.75`). In the held-out Test set (`30%`), **69.4%** of predictions fall within `<= 0.50` points of the actual score.
+  - **MAE por año y split (`2015`–`2019`)**: Shows consistent generalization across all 5 historical years (`Test MAE` stays stable between `0.37` and `0.44` while `Train MAE` stays around `0.13`–`0.15`).
+
+---
+
+### 7.2 Page 2 — `Predicho vs Real` (KPI 3: Predicted vs. Actual Score & Residual Analysis)
+![Dashboard Page 2 — Predicho vs Real](<dashboards/Predicho vs Real.png>)
+
+- **Scatter Plot (`Real vs Predicho — cada punto = un evento`)**:
+  - Plots `actual_score` (X-axis) vs. `predicted_score` (Y-axis) across all `782` events, colored by `Dataset Split` (`Test (30%)` in cyan, `Train (70%)` in pink). Points cluster tightly along the $y = x$ identity line across the entire happiness spectrum (`2.8` to `7.8`).
+- **Residual Distribution & Diagnostic KPIs**:
+  - **Sesgo / Bias (`-0.001`)**: The signed residual (`actual_score - predicted_score`) is centered at virtually zero (`-0.001`), demonstrating that the Random Forest pipeline neither systematically overestimates nor underestimates global happiness.
+  - **Error $\le 0.5$ en Test (`69.4%`)**: Nearly 7 out of 10 unseen test events are predicted within half a point on a 10-point scale.
+  - **Error Máximo (`1.717`) & Peores Predicciones**: Identifies specific outlier observations such as `Botswana (2017, actual 3.766; 2016, actual 3.974)` and `Tanzania (2019, actual 3.231)`, where reported subjective well-being is significantly lower than what their macroeconomic GDP and institutional indicators would predict.
+
+---
+
+### 7.3 Page 3 — `Países` (KPI 2: Predictions by Country)
+![Dashboard Page 3 — Predicciones por País](dashboards/Paises.png)
+
+- **Global Geographic Coverage (`Predicciones por país`)**:
+  - Visualizes predictions across all **`164` standardized countries** stored in `dim_country`.
+- **Top 10 Más Difíciles (Highest MAE by Country)**:
+  - Highlights countries with structural divergence between economic indicators and subjective happiness: `Botswana`, `Tanzania`, `Brazil`, `Costa Rica`, `Suriname`, `Rwanda`, `Belize`, `Sri Lanka`, `Guatemala`, and `Syria`. For instance, Latin American countries like `Costa Rica`, `Brazil`, and `Guatemala` consistently report higher life satisfaction than predicted by GDP alone, whereas `Botswana` and `Rwanda` report lower scores than their GDP/governance metrics suggest.
+- **Top 10 Mejor Predichos (Lowest MAE $< 0.06$)**:
+  - Countries whose happiness scores closely match the socioeconomic regression surface: `Swaziland`, `Australia`, `Uruguay`, `Spain`, `Canada`, `Congo`, `Jamaica`, `Mongolia`, `Oman`, and `Sudan`.
+
+---
+
+### 7.4 Page 4 — `Tendencias` (KPI 4: Prediction Trends Over Time)
+![Dashboard Page 4 — Tendencias Temporales](dashboards/Tendencias.png)
+
+- **Score Real vs. Predicho por Año (`2015`–`2019`)**:
+  - Tracks the global annual average `actual_score` (`5.35`–`5.41`) against `predicted_score` (`5.31`–`5.44`) across `dim_date.observation_year`. Both curves follow the same multi-year trajectory with a gap of less than `0.05` points in any given year.
+- **Calidad de Predicción por Año & `% de Predicciones con Error <= 0.5`**:
+  - The share of total predictions achieving an absolute error $\le 0.5$ improves from **`86.8%` in 2015** to **`91.7%` in 2018** and **`90.4%` in 2019**, confirming temporal stability across schema transitions.
+
+---
+
+### 7.5 Page 5 — `Salud del pipeline (Kafka)` (Event Contract & Streaming Operational KPIs)
+![Dashboard Page 5 — Salud del Pipeline Kafka](<dashboards/Salud del pipeline (Kafka).png>)
+
+- **Streaming Audit Cards (`raw_happiness_events`)**:
+  - **Eventos Recibidos (`786`)**: Total Kafka messages ingested into `raw_happiness_events` before validation.
+  - **Eventos Rechazados (`4`)**: Fault/malformed events intercepted by the Event Contract and inference guardrails without crashing the consumer.
+  - **Tasa de Validez (`99.5%`) & Predicciones Generadas (`782`)**: End-to-end valid delivery rate into `fact_predictions`.
+- **Estado de los Eventos & Tabla de Auditoría (`Eventos con problemas`)**:
+  - Displays the exact breakdown of `processing_status` and `validation_errors`:
+    1. `VALID`: `782` events (`99.49%`).
+    2. `INVALID_SCHEMA`: `2` events (`0.25%`) — `E_MALFORMED_JSON` (*Malformed JSON payload*) and `E_BAD_SCHEMA_01` (*Missing required model features `['health', 'freedom']` & non-numeric `gdp`*).
+    3. `INVALID_VALUES`: `1` event (`0.13%`) — `E_BAD_VALUES_01` (*Out-of-range negative `gdp = -1.5` and `actual_happiness_score = 99.9`*).
+    4. `PREDICTION_ERROR`: `1` event (`0.13%`) — `E_SIM_PRED_ERROR_01` (*Simulated runtime inference fault caught by consumer `try/except`*).
+- **Eventos por Partición & Throughput del Stream**:
+  - **Partition Balance**: Confirms that hashing by `key = country` distributes events across all **3 Kafka partitions** of `happiness-events` (`Partition 0: ~318`, `Partition 1: ~225`, `Partition 2: ~243`).
+  - **Streaming Throughput**: Sustains `~70–78 events/second` (`01:51:19` to `01:51:30`) with synchronous PostgreSQL persistence and manual offset commits.
+
+---
+
+### 7.6 Connecting Power BI Desktop to PostgreSQL
 1. Open **Power BI Desktop** $\rightarrow$ **Get Data** $\rightarrow$ **PostgreSQL database**.
 2. Server: `localhost:5432` | Database: `happiness_db` | User: `postgres` | Password: `postgres`.
 3. Load `fact_predictions`, `dim_country`, `dim_date`, `raw_happiness_events` and/or the views `vw_kpi_summary`, `vw_predictions_by_country`, `vw_predicted_vs_actual`, `vw_prediction_trends_over_time`, `vw_event_audit_status`.
-4. Save the Power BI file (`.pbix`) and screenshots in [`dashboards/`](dashboards/).
 
 ---
 
@@ -220,7 +280,12 @@ WorkShop-3/
 ├── sql/
 │   ├── create_tables.sql           # Step 7: Raw Table + Star Schema DDL + Power BI Views
 │   └── kpis.sql                    # Step 9: Analytical SQL queries for the required KPIs
-├── dashboards/                     # Power BI (.pbix) file and dashboard screenshots
+├── dashboards/                     # Power BI dashboard screenshots & report files
+│   ├── Happines- Error de prediccion.png
+│   ├── Predicho vs Real.png
+│   ├── Paises.png
+│   ├── Tendencias.png
+│   └── Salud del pipeline (Kafka).png
 ├── imagenes/
 │   ├── architecture.jpg            # End-to-end architecture diagram (Part A, Part B, Part C)
 │   └── dimensional_model.png       # Star Schema & Raw Staging Table diagram
