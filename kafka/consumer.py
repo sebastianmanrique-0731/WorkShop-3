@@ -22,7 +22,7 @@ from typing import Any
 
 import pandas as pd
 import psycopg2
-from confluent_kafka import Consumer, KafkaError
+from confluent_kafka import Consumer, KafkaError, TopicPartition
 from confluent_kafka.admin import AdminClient, NewTopic
 
 TOPIC_NAME = "happiness-events"
@@ -408,8 +408,16 @@ def run_consumer(
                 )
             except Exception as db_exc:
                 conn.rollback()
-                print(f"[Consumer] Database error storing raw event (offset not committed): {db_exc}")
-                continue
+                try:
+                    consumer.seek(TopicPartition(msg.topic(), msg.partition(), msg.offset()))
+                except Exception:
+                    pass
+                print(
+                    f"[Consumer] Fatal database error storing raw event at "
+                    f"partition={msg.partition()} offset={msg.offset()}: {db_exc}. "
+                    f"Stopping consumer without committing offset to prevent message loss."
+                )
+                break
 
             # 2. Validate against Event Contract
             status, parsed_event, error_msg = validate_event_contract(raw_payload_str)

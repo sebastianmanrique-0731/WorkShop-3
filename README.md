@@ -1,49 +1,48 @@
 # Workshop-3: Streaming ETL with Apache Kafka and Machine Learning
 
-## 1. Project Description
-This project implements an end-to-end **Batch + Streaming ETL and Real-Time Machine Learning Inference Pipeline** using the **World Happiness Report (`2015.csv`–`2019.csv`)** datasets.
+**Faculty of Engineering and Basic Sciences — Data Engineering and Artificial Intelligence**  
+**Course:** ETL (G01)
 
-The solution transitions from traditional offline batch preparation to an event-driven streaming architecture powered by **Apache Kafka**, **Scikit-learn**, **PostgreSQL**, and **Power BI**:
-1. **Part A (Offline Batch Process — Data Profiling & ML)**: Harmonizes 5 heterogeneous historical CSV schemas (`2015`–`2019`) into a unified analytical schema (`782` records), engineers socioeconomic features while preventing target leakage, flags the exact 70%/30% train-test split (`is_test_set`), and trains/serializes a reproducible `scikit-learn` regression pipeline (`models/model.pkl`).
-2. **Part B (Streaming ETL Process — Apache Kafka)**: Streams historical records one by one as JSON events through a 3-partition Kafka topic (`happiness-events` keyed by `country`), persists every incoming raw Kafka message into `raw_happiness_events` **before** transformation or prediction, validates each event against a strict **Event Contract**, and runs real-time inference via the consumer group `happiness-ml-team` with manual offset commits and atomic PostgreSQL transactions.
-3. **Part C (Prediction Storage & Analytics — PostgreSQL & Power BI)**: Stores validated predictions idempotently in a dimensional Star Schema (`fact_predictions`, `dim_country`, `dim_date`) linked to the raw staging table (`raw_happiness_events`) via `raw_event_id`, and exposes analytical SQL queries (`sql/kpis.sql`) and database views for real-time visualization in **Power BI**.
+---
+
+## 1. Project Description
+
+This project designs and implements an end-to-end **Streaming ETL and Real-Time Machine Learning Inference Pipeline** using the **World Happiness Report (`2015.csv`–`2019.csv`)** datasets, **Apache Kafka**, **Scikit-learn**, **PostgreSQL**, and **Power BI**.
+
+### Workshop Goal & Learning Objectives Achieved
+The pipeline transitions from traditional batch ETL processing to an event-driven streaming architecture capable of generating and storing real-time predictions with full data lineage and fault tolerance:
+1. **Heterogeneous Schema Integration (Part A — Steps 1 & 2)**: Profiles, cleans, and harmonizes 5 yearly CSV files (`2015`–`2019`) with divergent schemas and country naming conventions into a unified analytical dataset (`782` records across `164` countries).
+2. **Batch ML Preparation & Serialization (Part A — Steps 3 & 4)**: Selects 6 socioeconomic predictors while preventing target leakage, trains and evaluates three regression algorithms on a **70% training / 30% testing split**, and serializes a reproducible `scikit-learn` `Pipeline` (`SimpleImputer` $\rightarrow$ `StandardScaler` $\rightarrow$ `RandomForestRegressor`) as `models/model.pkl`.
+3. **Kafka Event Streaming & Contract Validation (Part B — Steps 5 & 6)**:
+   - **Producer (`kafka/producer.py`)**: Replays historical records one by one as JSON events to the `happiness-events` topic (`3` partitions, replication factor `1`) using `country` as the partition key.
+   - **Consumer (`kafka/consumer.py`, group `happiness-ml-team`)**: Persists every raw Kafka message into `raw_happiness_events` **before** any transformation or prediction, validates each event against a formal **Event Contract** (`VALID`, `INVALID_SCHEMA`, `INVALID_VALUES`, `PREDICTION_ERROR`), executes real-time inference using `models/model.pkl`, and commits offsets manually after atomic database persistence.
+4. **Analytical Star Schema & BI KPIs (Part C — Steps 7, 8 & 9)**: Stores predictions in PostgreSQL using a dimensional model (`fact_predictions`, `dim_country`, `dim_date`) linked to the raw staging table (`raw_happiness_events`) via `raw_event_id`, and exposes analytical views and SQL queries (`sql/kpis.sql`) for **Power BI**.
 
 ---
 
 ## 2. Architecture Explanation
 
-```mermaid
-flowchart TD
-    subgraph Offline["PART A — Offline Process (Batch ETL & ML Training)"]
-        A1["Historical CSVs (data/raw/2015..2019.csv)"] --> A2["EDA & Schema Harmonization (notebooks/eda.ipynb)"]
-        A2 --> A3["Unified Dataset (data/processed/happiness_unified.csv)"]
-        A3 --> A4["Feature Engineering & 70/30 Split (notebooks/model_training.ipynb)"]
-        A4 --> A5["Serialized Pipeline (models/model.pkl)"]
-    end
+![Streaming ETL with Apache Kafka + Machine Learning Architecture](imagenes/architecture.jpg)
 
-    subgraph Streaming["PART B — Streaming Process (Apache Kafka)"]
-        A3 --> B1["Kafka Producer (kafka/producer.py)"]
-        B1 -->|"JSON Event (key = country)"| B2[("Kafka Topic: happiness-events\n(3 Partitions, RF=1)")]
-        B2 --> B3["Kafka Consumer (kafka/consumer.py)\nGroup: happiness-ml-team"]
-    end
+### 2.1 Offline Process (Part A — Batch ETL & Model Training)
+1. **Historical CSV Files (`data/raw/2015.csv`–`2019.csv`)**: Raw yearly reports with differing column names, scales, and auxiliary metrics.
+2. **Data Profiling, Cleaning & Schema Harmonization (`notebooks/eda.ipynb`)**: Resolves column naming differences, imputes missing values, standardizes country names, and flags the 70%/30% train-test split (`is_test_set`), producing `data/processed/happiness_unified.csv`.
+3. **Feature Engineering & Model Training (`notebooks/model_training.ipynb`)**: Evaluates candidate regression models and exports the complete preprocessing + regression pipeline to `models/model.pkl`.
 
-    subgraph Storage["PART C — Prediction Storage & Analytics (PostgreSQL + Power BI)"]
-        B3 -->|"1. Store Raw Event First"| C1[("raw_happiness_events\n(Staging / Audit Table)")]
-        C1 --> B4{"2. Validate Event Contract"}
-        B4 -->|"INVALID_SCHEMA /\nINVALID_VALUES"| C1
-        B4 -->|"VALID"| B5["3. Load model.pkl & Predict"]
-        A5 -.-> B5
-        B5 -->|"PREDICTION_ERROR"| C1
-        B5 -->|"4. Atomic Transaction:\nUpdate VALID + Upsert Fact"| C2[("Star Schema:\nfact_predictions\ndim_country | dim_date")]
-        C2 --> C3["Power BI Dashboard & SQL KPIs (sql/kpis.sql)"]
-    end
-```
+### 2.2 Streaming Process (Part B & Part C — Real-Time Inference & Analytics)
+1. **Kafka Producer (`kafka/producer.py`)**: Reads `happiness_unified.csv` row by row, serializes each observation as a JSON event with an ISO-8601 `event_time`, and publishes it to the **`happiness-events`** topic (`3` partitions, `replication_factor=1`) using `country` as the event key.
+2. **Kafka Consumer (`kafka/consumer.py`, group `happiness-ml-team`)**:
+   - **Step 1 (Raw Storage First)**: Immediately inserts the original incoming Kafka message into `raw_happiness_events` (`processing_status = 'RECEIVED'`) before parsing or transforming.
+   - **Step 2 (Event Contract Validation)**: Checks required fields, data types, domain ranges, and model features. Invalid records are updated in `raw_happiness_events` (`INVALID_SCHEMA` or `INVALID_VALUES`) with their exact error reason and skipped without crashing the pipeline.
+   - **Step 3 (Feature Preparation & Real-Time Prediction)**: Orders the 6 features identically to training (`gdp`, `family`, `health`, `freedom`, `generosity`, `corruption`), runs inference via `models/model.pkl`, and computes `prediction_error = |actual_score - predicted_score|`. Runtime inference faults are caught and logged as `PREDICTION_ERROR`.
+   - **Step 4 (Atomic Star Schema Persistence & Manual Offset Commit)**: Within a single PostgreSQL transaction, updates `raw_happiness_events` to `VALID`, upserts `dim_country` and `dim_date`, and upserts `fact_predictions` linked via `raw_event_id`. Only after `conn.commit()` succeeds does the consumer manually commit the Kafka offset.
+3. **Dashboard & KPIs (`sql/kpis.sql` + Power BI)**: Queries PostgreSQL directly to visualize the 4 core KPIs and contract audit metrics.
 
-### Folder Structure
+### 2.3 Repository Folder Structure
 ```text
 WorkShop-3/
 ├── data/
-│   ├── raw/                        # Original 2015.csv - 2019.csv files
+│   ├── raw/                        # Original historical CSVs (2015.csv - 2019.csv)
 │   ├── processed/                  # Harmonized dataset (happiness_unified.csv)
 │   └── streaming/                  # Emitted JSONL event stream snapshot
 ├── notebooks/
@@ -57,69 +56,101 @@ WorkShop-3/
 ├── sql/
 │   ├── create_tables.sql           # Step 7: Raw Table + Star Schema DDL + Power BI Views
 │   └── kpis.sql                    # Step 9: Analytical SQL queries for the required KPIs
-├── dashboards/                     # Power BI (.pbix) file and screenshots folder
+├── dashboards/                     # Power BI (.pbix) file and dashboard screenshots
+├── imagenes/
+│   └── architecture.jpg            # End-to-end architecture diagram (Part A, Part B, Part C)
 ├── docker-compose.yml              # Zookeeper + Apache Kafka + PostgreSQL 15
 ├── requirements.txt                # Python dependencies
-└── README.md                       # Project documentation
+└── README.md                       # Mandatory project documentation
 ```
 
 ---
 
 ## 3. Data Cleaning & Harmonization Decisions (Part A — Steps 1 & 2)
 
-1. **Schema Harmonization Across 5 Years (`2015`–`2019`)**:
-   - The five raw CSV files use different column names (`Economy (GDP per Capita)` in 2015–2016, `Economy..GDP.per.Capita.` in 2017, `GDP per capita` in 2018–2019) and different auxiliary columns.
-   - All five datasets were mapped to a single unified schema:
-     `country` (`str`), `year` (`int64`), `gdp` (`float64`), `family` (`float64`), `health` (`float64`), `freedom` (`float64`), `generosity` (`float64`), `corruption` (`float64`), `happiness_score` (`float64`), plus `is_test_set` (`bool`).
-2. **Handling Missing Values (`2018.csv` — `United Arab Emirates`)**:
-   - Across all 782 rows, only **1 missing value** exists: `Perceptions of corruption` is `NaN` for `United Arab Emirates` in `2018.csv` (row 20).
-   - **Decision**: Instead of dropping the country's 2018 observation, we imputed the missing value using **United Arab Emirates' historical mean across 2015, 2016, 2017, and 2019 (`0.31198`)**, preserving temporal continuity. Additionally, `SimpleImputer(strategy="median")` is embedded in the `scikit-learn` pipeline as a fallback safeguard.
-3. **Standardizing Country Names (Entity Resolution)**:
-   - Six territories appeared under inconsistent names across years:
+Implemented and documented with visual outputs in [`notebooks/eda.ipynb`](notebooks/eda.ipynb):
+
+### 3.1 Schema Differences Across Years (`2015`–`2019`)
+The five CSV files do not share a uniform schema:
+- **`2015.csv` (`158` rows $\times$ `12` cols) & `2016.csv` (`157` rows $\times$ `13` cols)**: Use spaces and parentheses (`Economy (GDP per Capita)`, `Health (Life Expectancy)`, `Trust (Government Corruption)`) and include `Region`, `Dystopia Residual`, and confidence intervals/standard error.
+- **`2017.csv` (`155` rows $\times$ `12` cols)**: Uses dot-separated column names (`Happiness.Score`, `Economy..GDP.per.Capita.`, `Whisker.high`, `Whisker.low`) and removes `Region`.
+- **`2018.csv` (`156` rows $\times$ `9` cols) & `2019.csv` (`156` rows $\times$ `9` cols)**: Rename columns (`Score`, `Country or region`, `GDP per capita`, `Social support`, `Healthy life expectancy`, `Freedom to make life choices`, `Perceptions of corruption`) and drop `Dystopia Residual` and confidence intervals.
+
+### 3.2 Unified Analytical Schema Proposal
+All 5 datasets were harmonized into the following unified schema (`782` total rows):
+
+| Unified Column | Type | Source Mapping (`2015–2016` / `2017` / `2018–2019`) | Analytical & Streaming Role |
+| :--- | :--- | :--- | :--- |
+| `country` | `string` | `Country` / `Country` / `Country or region` | Entity name, Kafka event key, `dim_country` business key |
+| `year` | `int64` | File year (`2015`–`2019`) | Temporal identifier (`dim_date`) |
+| `gdp` | `float64` | `Economy (GDP per Capita)` / `Economy..GDP.per.Capita.` / `GDP per capita` | ML Input Feature 1 |
+| `family` | `float64` | `Family` / `Family` / `Social support` | ML Input Feature 2 |
+| `health` | `float64` | `Health (Life Expectancy)` / `Health..Life.Expectancy.` / `Healthy life expectancy` | ML Input Feature 3 |
+| `freedom` | `float64` | `Freedom` / `Freedom` / `Freedom to make life choices` | ML Input Feature 4 |
+| `generosity` | `float64` | `Generosity` / `Generosity` / `Generosity` | ML Input Feature 5 |
+| `corruption` | `float64` | `Trust (Government Corruption)` / `Trust..Government.Corruption.` / `Perceptions of corruption` | ML Input Feature 6 |
+| `happiness_score` | `float64` | `Happiness Score` / `Happiness.Score` / `Score` | Target variable (`actual_happiness_score`) |
+| `is_test_set` | `bool` | Generated via `train_test_split(test_size=0.30, random_state=42)` | Distinguishes `Test (30%)` vs `Train (70%)` in KPIs |
+
+### 3.3 Justification of Cleaning Decisions
+1. **Missing Values (`1` null across `782` rows)**:
+   - Only `2018.csv` row 20 (`United Arab Emirates`) has a missing value (`Perceptions of corruption = NaN`).
+   - **Decision**: Rather than discarding the country's 2018 observation, we imputed the missing value using **United Arab Emirates' historical mean across 2015, 2016, 2017, and 2019 (`0.31198`)**. In addition, `SimpleImputer(strategy="median")` is included as the first step of the serialized `scikit-learn` pipeline.
+2. **Duplicated Records**:
+   - Verified `0` full-row duplicates and `0` duplicate `(country, year)` pairs across all 5 files.
+3. **Entity Resolution (Standardizing Inconsistent Country Names)**:
+   - Detected 6 territories whose naming changed across years:
      - `Hong Kong S.A.R., China` (2017) $\rightarrow$ `Hong Kong`
      - `Taiwan Province of China` (2017) $\rightarrow$ `Taiwan`
      - `Trinidad & Tobago` (2018–2019) $\rightarrow$ `Trinidad and Tobago`
      - `Northern Cyprus` (2018–2019) $\rightarrow$ `North Cyprus`
      - `Macedonia` (2015–2018) $\rightarrow$ `North Macedonia`
      - `Somaliland region` (2015) $\rightarrow$ `Somaliland Region`
-   - **Decision**: Standardized all 6 names, reducing unique countries from `170` to `164`. This guarantees consistent Kafka partition routing (`key = country`) and prevents duplicate entries in `dim_country`.
-4. **Outlier Treatment ($1.5 \times \text{IQR}$ Rule)**:
-   - IQR inspection flagged high-end values in `corruption` (67 records, e.g., Denmark, Singapore, New Zealand where government trust is very high), `generosity` (17 records, e.g., Myanmar), and low-end values in `family` (10 records in conflict-affected nations).
-   - **Decision**: All 782 records were retained because these represent legitimate socioeconomic extremes rather than measurement corruption.
+   - **Decision**: Normalizing these 6 names reduced distinct country entities from `170` to `164`, ensuring all historical events for the same country hash to the same Kafka partition (`key = country`) and map to a single row in `dim_country`.
+4. **Outlier Inspection ($1.5 \times \text{IQR}$ Rule)**:
+   - `corruption` (`67` upper outliers, e.g., Rwanda, Singapore, Denmark), `generosity` (`17` upper outliers, e.g., Myanmar), and `family` (`10` lower outliers in conflict zones) reflect genuine socioeconomic diversity rather than data corruption. All `782` records were retained.
 
 ---
 
 ## 4. Feature Engineering & Model Training Decisions (Part A — Steps 3 & 4)
 
-1. **Selected Features (`6` Predictors)**:
-   - `['gdp', 'family', 'health', 'freedom', 'generosity', 'corruption']`
-   - Pearson correlations with `happiness_score`: `gdp` ($r = 0.789$), `health` ($r = 0.742$), `family` ($r = 0.649$), `freedom` ($r = 0.551$), `corruption` ($r = 0.400$), `generosity` ($r = 0.138$).
-2. **Preventing Target Leakage**:
-   - Excluded `Dystopia Residual` (only present in 2015–2017, and mathematically defined such that the 6 factors plus `Dystopia Residual` equal `Happiness Score`), `Happiness Rank` / `Overall rank`, `Standard Error`, `Confidence Intervals`, and `Whisker.high/low`.
-   - In streaming inference, `actual_happiness_score` is never passed to the model; it is used strictly to compute `prediction_error` after prediction.
-3. **Excluding `country` and `year` from Model Inputs**:
-   - `country` and `year` are routing/dimensional attributes (`dim_country`, `dim_date`), not socioeconomic predictors. Excluding them allows the model to generalize purely from socioeconomic indicators.
-4. **Reproducible `scikit-learn` Pipeline & 70/30 Evaluation**:
-   - Data split: **70% training (`547` records)** / **30% testing (`235` records)** (`random_state=42`).
-   - Preprocessing (`SimpleImputer(strategy="median")` + `StandardScaler()`) is bundled inside a `sklearn.pipeline.Pipeline` together with the regressor and saved to `models/model.pkl`.
+Implemented and documented in [`notebooks/model_training.ipynb`](notebooks/model_training.ipynb):
 
-| Model | MAE (Test 30%) | RMSE (Test 30%) | $R^2$ (Test 30%) |
+1. **Feature Selection (`6` Socioeconomic Predictors)**:
+   - Selected features: `['gdp', 'family', 'health', 'freedom', 'generosity', 'corruption']`.
+   - Pearson correlations with `happiness_score`:
+     - `gdp`: **$r = 0.7893$**
+     - `health`: **$r = 0.7425$**
+     - `family`: **$r = 0.6488$**
+     - `freedom`: **$r = 0.5513$**
+     - `corruption`: **$r = 0.4000$**
+     - `generosity`: **$r = 0.1376$**
+2. **Target Leakage Prevention**:
+   - **Dropped `Dystopia Residual`**: In the World Happiness Report methodology, the sum of the 6 factors plus `Dystopia Residual` equals `Happiness Score` identically. Keeping it would cause 100% target leakage and fail on 2018–2019 data where it is absent.
+   - **Dropped `Happiness Rank` / `Overall rank` & Confidence Intervals / Whiskers**: Direct transformations of the target score.
+   - **Strict Isolation of `actual_happiness_score`**: In streaming inference, `actual_happiness_score` is never passed to the model; it is used strictly after prediction to calculate `prediction_error`.
+3. **Why `country` and `year` Are Excluded from Model Features**:
+   - `country` is the Kafka routing key and `dim_country` foreign key; `year` is the temporal dimension (`dim_date`). Excluding them prevents high-cardinality one-hot encoding and ensures predictions depend solely on socioeconomic indicators.
+4. **Reproducible `scikit-learn` Pipeline (`models/model.pkl`)**:
+   - Combines `SimpleImputer(strategy="median")` $\rightarrow$ `StandardScaler()` $\rightarrow$ `Regressor` inside a single `sklearn.pipeline.Pipeline` fitted exclusively on the **70% training split (`547` rows)** and evaluated on the **30% test split (`235` rows)** (`random_state=42`):
+
+| Regression Model | MAE (Test 30%) | RMSE (Test 30%) | $R^2$ (Test 30%) |
 | :--- | :---: | :---: | :---: |
-| **Random Forest Regressor (`n_estimators=200`)** *(Saved in `model.pkl`)* | **0.4071** | **0.5213** | **0.7823** |
+| **Random Forest Regressor (`n_estimators=200`)** *(Serialized in `model.pkl`)* | **0.4071** | **0.5213** | **0.7823** |
 | Linear Regression | 0.4487 | 0.5846 | 0.7263 |
 | Decision Tree Regressor (`max_depth=5`) | 0.5205 | 0.6703 | 0.6401 |
 
-> **Important Note on Streaming Evaluation (`is_test_set`)**:
-> Because Part B streams the entire bounded historical dataset (`782` records: `547` training records + `235` test records), the global MAE across all 782 streamed records is `0.2197` (combining the in-sample training MAE of `0.1391` and the out-of-sample test MAE of `0.4071`). To allow complete analytical transparency in PostgreSQL and Power BI, each event and `fact_predictions` row carries `is_test_set` (`TRUE` for the 235 test records, `FALSE` for the 547 training records), and `vw_kpi_summary` / `sql/kpis.sql` report both the global metrics and the strict Test-Set-Only (`30%`) metrics.
+> **Streaming Evaluation Note (`is_test_set`)**:
+> Because Part B streams all `782` historical records (`547` train + `235` test), the global MAE across all 782 records is `0.2197` (combining in-sample Train MAE `0.1391` and out-of-sample Test MAE `0.4071`). Each record carries `is_test_set` (`True`/`False`) into `fact_predictions` so Power BI and `sql/kpis.sql` can report both the full-stream metrics and the strict held-out **30% Test Set** metrics.
 
 ---
 
-## 5. Kafka Pipeline, Event Contract & Reliability Guarantees (Part B — Steps 5 & 6)
+## 5. Kafka Pipeline & Event Contract Explanation (Part B — Steps 5 & 6)
 
-### Producer (`kafka/producer.py`)
+### 5.1 Kafka Producer (`kafka/producer.py`)
 - Automatically creates/verifies topic **`happiness-events`** with **3 partitions** and **replication factor 1**.
-- Streams records one by one from `data/processed/happiness_unified.csv` with a configurable delay (`--delay 0.01`), serializing each event as JSON and using **`country` as the Kafka event key** (`key=event["country"].encode("utf-8")`).
-- Emits payload in the required format:
+- Reads `data/processed/happiness_unified.csv` record by record, serializes each record as JSON, and publishes to `happiness-events` using **`country` as the Kafka event key** (`key=event["country"].encode("utf-8")`) with a configurable delay (`--delay 0.01`).
+- Emits events in the required JSON format:
 ```json
 {
   "event_id": "E001",
@@ -137,22 +168,27 @@ WorkShop-3/
 }
 ```
 
-### Event Contract, Atomic Persistence & Consumer Reliability (`kafka/consumer.py`)
-The consumer (`group.id = happiness-ml-team`) enforces strict data consistency and fault-tolerance guarantees:
-1. **Persist Raw Event First (Idempotent by Kafka Offset)**:
-   - Every incoming message is immediately inserted into `raw_happiness_events` (`processing_status = 'RECEIVED'`) before parsing, validation, or inference.
-   - A `UNIQUE (kafka_topic, kafka_partition, kafka_offset)` constraint ensures that if a consumer restarts or rebalances, re-reading the same offset updates the existing raw record rather than duplicating it.
-2. **Contract Validation & Error States**:
-   - `INVALID_SCHEMA`: Malformed JSON, missing any of the 11 required contract fields (`event_id`, `country`, `year`, the 6 model features, `actual_happiness_score`, `event_time`), or invalid data types.
-   - `INVALID_VALUES`: Empty `event_id` or `country`, `year` outside `[1900, 2100]`, any of the 6 features `NaN`/`Inf` or outside `[0.0, 10.0]`, `actual_happiness_score` outside `(0.0, 10.0]`, or invalid ISO-8601 `event_time`.
-   - `PREDICTION_ERROR`: Runtime failure during feature transformation, `model.predict()`, or database persistence (tested via fault injection in `--inject-invalid` with `E_SIM_PRED_ERROR_01`).
-   - `VALID`: Passes all checks and proceeds to atomic persistence.
-3. **Single Atomic Database Transaction (`commit_valid_prediction_transaction`)**:
-   - Updating `raw_happiness_events.processing_status = 'VALID'`, upserting `dim_country` and `dim_date`, and inserting/upserting into `fact_predictions` execute inside a **single PostgreSQL transaction** wrapped in `try/except`. If `fact_predictions` insertion fails for any reason, `conn.rollback()` executes so `raw_happiness_events` is never left inconsistently marked `VALID` without a corresponding prediction row.
-4. **Idempotency Across Multiple Producer Runs (`UNIQUE (event_id)`)**:
-   - `fact_predictions` enforces `UNIQUE (event_id)` with `ON CONFLICT (event_id) DO UPDATE`, ensuring that running `producer.py` multiple times updates the 782 analytical predictions in place without inflating or duplicating KPI counts.
-5. **Manual Kafka Offset Commit (`enable.auto.commit = False`)**:
-   - Offsets are committed synchronously (`consumer.commit(message=msg, asynchronous=False)`) **only after** the PostgreSQL transaction has been durably committed, preventing event loss.
+### 5.2 Event Contract Definition
+Before inference, every incoming Kafka message must satisfy the following contract in [`validate_event_contract`](kafka/consumer.py):
+- `event_id`: Non-empty string (`str`); unique identifier for traceability.
+- `country`: Non-empty string (`str`); also used as the Kafka partition key.
+- `year`: Integer (`int`, excluding `bool`) within `[1900, 2100]`.
+- `gdp`, `family`, `health`, `freedom`, `generosity`, `corruption`: Finite numeric values (`int` or `float`, excluding `bool`, `NaN`, `Inf`) within `[0.0, 10.0]`. All 6 model features must be present.
+- `actual_happiness_score`: Finite numeric value within `(0.0, 10.0]` used **only for post-prediction evaluation**, never as a model input feature.
+- `event_time`: Valid ISO-8601 timestamp string representing when the producer emitted the event.
+
+### 5.3 Kafka Consumer & Fault-Tolerance Architecture (`kafka/consumer.py`)
+The consumer (`group.id = happiness-ml-team`) implements five reliability guarantees:
+1. **Raw Event Storage First**: Every Kafka message is inserted into `raw_happiness_events` (`processing_status = 'RECEIVED'`) **before** validation, feature transformation, or prediction. If the raw insert itself fails due to a database outage, the consumer seeks back to the uncommitted offset (`consumer.seek`) and stops cleanly so zero messages are lost.
+2. **All 4 Processing Statuses Tracked & Tested (`--inject-invalid`)**:
+   - `VALID` (`782` records): Passes contract validation and succeeds in prediction.
+   - `INVALID_SCHEMA` (`2` test records): Malformed JSON, missing required fields/features (`health`, `freedom`), or wrong data types (`gdp = "not_a_number"`).
+   - `INVALID_VALUES` (`1` test record): Out-of-bounds numerical values (`gdp = -1.5`, `actual_happiness_score = 99.9`).
+   - `PREDICTION_ERROR` (`1` test record): Valid schema/values that encounter a runtime fault during inference (`E_SIM_PRED_ERROR_01`).
+   - All invalid/error events are stored in `raw_happiness_events` with their exact `validation_errors` description, skipped from prediction, and **never crash the pipeline**.
+3. **Single Atomic Database Transaction**: Updating `raw_happiness_events` to `VALID`, upserting `dim_country` and `dim_date`, and upserting `fact_predictions` occur in one atomic transaction (`commit_valid_prediction_transaction`).
+4. **Idempotency Against Re-Runs**: `raw_happiness_events` enforces `UNIQUE (kafka_topic, kafka_partition, kafka_offset)` and `fact_predictions` enforces `UNIQUE (event_id)`, preventing duplicate rows if the producer is executed multiple times.
+5. **Manual Offset Commit (`enable.auto.commit = False`)**: Kafka offsets are committed synchronously only after PostgreSQL commits the transaction.
 
 ---
 
@@ -212,28 +248,32 @@ erDiagram
     }
 ```
 
+- **Staging / Traceability Table (`raw_happiness_events`)**: Stores the exact raw Kafka payload, partition, offset, status, and validation error reason. Not a dimension table; serves auditing, debugging, and reprocessing.
+- **Dimensions (`dim_country`, `dim_date`)**: Normalized lookup tables for country (`164` countries) and observation year (`2015`–`2019`).
+- **Fact Table (`fact_predictions`)**: Stores each validated prediction (`actual_score`, `predicted_score`, `prediction_error`), timestamps (`event_time`, `prediction_timestamp`), and foreign keys (`raw_event_id`, `country_id`, `date_id`).
+
 ---
 
 ## 7. Dashboard & KPIs Explanation (Part C — Step 9)
 
-All analytical SQL queries and views for **Power BI** are provided in [`sql/kpis.sql`](sql/kpis.sql) and [`sql/create_tables.sql`](sql/create_tables.sql):
+The dashboard queries **PostgreSQL (`happiness_db`) directly** (never CSV files) using the Star Schema tables and pre-built SQL views in [`sql/create_tables.sql`](sql/create_tables.sql) and [`sql/kpis.sql`](sql/kpis.sql):
 
 1. **KPI 1 — Average Prediction Error (`vw_kpi_summary`)**:
-   - Measures streaming inference accuracy both overall (`mae_all_events = 0.2197`) and strictly on the held-out 30% test split (`mae_test_set_only = 0.4071`, `rmse_test_set_only = 0.5213`).
+   - Evaluates model accuracy in streaming production: reports `MAE` and `RMSE` both for the **30% Out-of-Sample Test Set (`MAE = 0.4071`, `RMSE = 0.5213`)** and across all `782` events (`MAE = 0.2197`).
 2. **KPI 2 — Predictions by Country (`vw_predictions_by_country`)**:
-   - Compares average `predicted_score`, `actual_score`, and `prediction_error` across all 164 standardized countries (`dim_country`) for geographic map and ranking visuals.
+   - Aggregates `avg_actual_score`, `avg_predicted_score`, and `avg_prediction_error` across all `164` countries (`dim_country`) for choropleth maps and Top/Bottom country rankings.
 3. **KPI 3 — Predicted vs. Actual Score (`vw_predicted_vs_actual`)**:
-   - Event-level scatter and residual analysis comparing `actual_score` against `predicted_score` (`residual_signed = actual_score - predicted_score`), filterable by `dataset_split` (`Test (30%)` vs `Train (70%)`).
+   - Event-level comparison (`actual_score`, `predicted_score`, `residual_signed`, `prediction_error`, `dataset_split`) used for scatter plots ($y = \hat{y}$) and residual distribution analysis.
 4. **KPI 4 — Prediction Trends Over Time (`vw_prediction_trends_over_time`)**:
-   - Tracks the evolution of average actual vs. predicted happiness scores and prediction error across historical observation years (`2015`–`2019` via `dim_date`) as well as streaming ingestion timestamps (`prediction_timestamp`).
-5. **Audit KPI — Event Contract Status (`vw_event_audit_status`)**:
-   - Monitors pipeline reliability by counting `VALID` (`782`), `INVALID_SCHEMA` (`2`), `INVALID_VALUES` (`1`), and `PREDICTION_ERROR` (`1`) records in `raw_happiness_events`.
+   - Tracks average actual vs. predicted happiness scores and prediction error across historical years (`2015`–`2019` via `dim_date`) and real-time streaming ingestion windows (`prediction_timestamp`).
+5. **Audit KPI — Event Contract Validation (`vw_event_audit_status`)**:
+   - Displays pipeline health and contract enforcement (`782 VALID`, `2 INVALID_SCHEMA`, `1 INVALID_VALUES`, `1 PREDICTION_ERROR`).
 
-### Connecting Power BI to PostgreSQL
+### Connecting Power BI Desktop to PostgreSQL
 1. Open **Power BI Desktop** $\rightarrow$ **Get Data** $\rightarrow$ **PostgreSQL database**.
-2. Enter Server: `localhost:5432` and Database: `happiness_db` (User: `postgres`, Password: `postgres`).
-3. Select the Star Schema tables (`fact_predictions`, `dim_country`, `dim_date`, `raw_happiness_events`) and/or the pre-built analytical views (`vw_kpi_summary`, `vw_predictions_by_country`, `vw_predicted_vs_actual`, `vw_prediction_trends_over_time`, `vw_event_audit_status`).
-4. Save the Power BI report (`.pbix`) and screenshots inside the [`dashboards/`](dashboards/) folder.
+2. Server: `localhost:5432` | Database: `happiness_db` | User: `postgres` | Password: `postgres`.
+3. Load `fact_predictions`, `dim_country`, `dim_date`, `raw_happiness_events` and/or the views `vw_kpi_summary`, `vw_predictions_by_country`, `vw_predicted_vs_actual`, `vw_prediction_trends_over_time`, `vw_event_audit_status`.
+4. Save the Power BI file (`.pbix`) and screenshots in [`dashboards/`](dashboards/).
 
 ---
 
@@ -255,22 +295,30 @@ pip install -r requirements.txt
 ```powershell
 docker compose up -d
 ```
-*(Wait ~15 seconds for Kafka and PostgreSQL healthchecks to pass. PostgreSQL automatically runs `sql/create_tables.sql` on initialization).*
+*(Wait ~15 seconds for containers to be healthy. To apply or reset the database schema cleanly at any time, run)*:
+```powershell
+Get-Content sql/create_tables.sql | docker exec -i workshop3-postgres psql -U postgres -d happiness_db
+```
 
 ### Step 3: Start the Real-Time Kafka Consumer (Terminal 1)
-*(Make sure `.\venv\Scripts\Activate.ps1` is active in Terminal 1)*:
+*(With `.\venv\Scripts\Activate.ps1` active)*:
 ```powershell
 python kafka/consumer.py
 ```
 
 ### Step 4: Run the Kafka Producer to Stream Events (Terminal 2)
-*(Make sure `.\venv\Scripts\Activate.ps1` is active in Terminal 2)*. Stream all 782 harmonized records (plus 4 test malformed/fault records to verify `INVALID_SCHEMA`, `INVALID_VALUES`, and `PREDICTION_ERROR` handling):
+*(With `.\venv\Scripts\Activate.ps1` active)*. Stream all `782` valid historical events plus `4` contract/fault test events (`786` total):
 ```powershell
 python kafka/producer.py --delay 0.01 --inject-invalid
 ```
 
-### Step 5: Verify Predictions & KPIs in PostgreSQL
-Run the analytical KPI queries directly inside the PostgreSQL container:
+### Step 5: Execute Analytical KPI Queries in PostgreSQL
 ```powershell
 Get-Content sql/kpis.sql | docker exec -i workshop3-postgres psql -U postgres -d happiness_db
+```
+
+### Step 6: Stop Services (Preserving Database Data)
+Press `Ctrl + C` in the consumer terminal, then run:
+```powershell
+docker compose stop
 ```
