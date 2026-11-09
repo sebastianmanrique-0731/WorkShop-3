@@ -1,10 +1,13 @@
 """
 Workshop-3 — Step 6: Kafka Consumer & Real-Time ML Inference
 Consumes streaming events from 'happiness-events' (consumer group 'happiness-ml-team'):
-1. Stores the raw incoming Kafka message in 'raw_happiness_events' BEFORE transformation/prediction.
+1. Stores the raw incoming Kafka message in 'raw_happiness_events' BEFORE transformation/prediction
+   with idempotency on (kafka_topic, kafka_partition, kafka_offset).
 2. Validates the incoming event against the defined Event Contract.
 3. Applies the exact feature ordering and preprocessing pipeline ('models/model.pkl').
-4. Generates real-time happiness score predictions and stores them in PostgreSQL ('fact_predictions').
+4. Atomically updates raw status to 'VALID' and upserts prediction into 'fact_predictions'
+   (idempotent on 'event_id') within a single database transaction, wrapped in try/except.
+5. Manually commits Kafka offsets only AFTER database persistence succeeds.
 """
 
 import argparse
@@ -54,7 +57,7 @@ def get_pg_connection():
 
 
 def initialize_database(conn) -> None:
-    """Ensure all required tables exist before consuming events."""
+    """Ensure all required tables, constraints, and views exist before consuming events."""
     if SCHEMA_SQL_PATH.exists():
         sql_script = SCHEMA_SQL_PATH.read_text(encoding="utf-8")
         with conn.cursor() as cur:
@@ -71,13 +74,6 @@ def load_serialized_model(model_path: Path):
         pipeline = pickle.load(f)
     print(f"[Consumer] Loaded serialized ML pipeline from {model_path}")
     return pipeline
-
-
-def is_valid_number(val: Any) -> bool:
-    """Return True if val is an int or float (excluding bool) and not NaN/Inf."""
-    if isinstance(val, bool) or not isinstance(val, (int, float)):
-        return False
-    return not (math.isnan(float(val)) or math.isinf(float(val)))
 
 
 def validate_event_contract(raw_payload: str) -> tuple[str, dict[str, Any] | None, str | None]:
@@ -166,6 +162,7 @@ def insert_raw_event_before_processing(
     """
     Step 6.2 Requirement: Store the original incoming Kafka message into
     'raw_happiness_events' BEFORE applying any transformation or prediction.
+    Idempotent on (kafka_topic, kafka_partition, kafka_offset).
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -175,6 +172,10 @@ def insert_raw_event_before_processing(
                 raw_payload, processing_status
             )
             VALUES (%s, %s, %s, %s, %s, 'RECEIVED')
+            ON CONFLICT (kafka_topic, kafka_partition, kafka_offset)
+            DO UPDATE SET
+                raw_payload = EXCLUDED.raw_payload,
+                ingested_at = CURRENT_TIMESTAMP
             RETURNING raw_event_id;
             """,
             (topic, partition, offset, event_key, raw_payload),
@@ -192,7 +193,7 @@ def update_raw_event_status(
     event_time_iso: str | None = None,
     validation_errors: str | None = None,
 ) -> None:
-    """Update the raw event record with its final validation/prediction status."""
+    """Update the raw event record with its validation/error status."""
     parsed_event_time = None
     if event_time_iso and isinstance(event_time_iso, str):
         try:
@@ -215,21 +216,38 @@ def update_raw_event_status(
     conn.commit()
 
 
-def store_prediction_result(
+def commit_valid_prediction_transaction(
     conn,
     raw_event_id: int,
     event: dict[str, Any],
     predicted_score: float,
     prediction_error: float,
 ) -> None:
-    """Upsert dimension keys ('dim_country', 'dim_date') and insert into 'fact_predictions'."""
+    """
+    Atomically update raw_happiness_events to 'VALID', upsert dimensions ('dim_country',
+    'dim_date'), and upsert 'fact_predictions' (idempotent on 'event_id') in a single transaction.
+    """
     country_name = event["country"].strip()
     obs_year = int(event["year"])
     decade_str = f"{(obs_year // 10) * 10}s"
     event_time_dt = datetime.fromisoformat(event["event_time"].replace("Z", "+00:00"))
+    is_test_set = bool(event.get("is_test_set", False))
 
     with conn.cursor() as cur:
-        # Upsert dim_country
+        # 1. Update raw_happiness_events status to VALID inside the same transaction
+        cur.execute(
+            """
+            UPDATE raw_happiness_events
+            SET event_id = %s,
+                event_time = %s,
+                processing_status = 'VALID',
+                validation_errors = NULL
+            WHERE raw_event_id = %s;
+            """,
+            (event["event_id"].strip(), event_time_dt, raw_event_id),
+        )
+
+        # 2. Upsert dim_country
         cur.execute(
             """
             INSERT INTO dim_country (country_name)
@@ -241,7 +259,7 @@ def store_prediction_result(
         )
         country_id = cur.fetchone()[0]
 
-        # Upsert dim_date
+        # 3. Upsert dim_date
         cur.execute(
             """
             INSERT INTO dim_date (observation_year, decade)
@@ -253,15 +271,31 @@ def store_prediction_result(
         )
         date_id = cur.fetchone()[0]
 
-        # Insert into fact_predictions linked via raw_event_id
+        # 4. Upsert into fact_predictions (idempotent on event_id so re-running producer updates cleanly)
         cur.execute(
             """
             INSERT INTO fact_predictions (
                 raw_event_id, event_id, country_id, date_id,
                 gdp, family, health, freedom, generosity, corruption,
-                actual_score, predicted_score, prediction_error, event_time
+                actual_score, predicted_score, prediction_error, is_test_set, event_time
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (event_id) DO UPDATE SET
+                raw_event_id = EXCLUDED.raw_event_id,
+                country_id = EXCLUDED.country_id,
+                date_id = EXCLUDED.date_id,
+                gdp = EXCLUDED.gdp,
+                family = EXCLUDED.family,
+                health = EXCLUDED.health,
+                freedom = EXCLUDED.freedom,
+                generosity = EXCLUDED.generosity,
+                corruption = EXCLUDED.corruption,
+                actual_score = EXCLUDED.actual_score,
+                predicted_score = EXCLUDED.predicted_score,
+                prediction_error = EXCLUDED.prediction_error,
+                is_test_set = EXCLUDED.is_test_set,
+                event_time = EXCLUDED.event_time,
+                prediction_timestamp = CURRENT_TIMESTAMP;
             """,
             (
                 raw_event_id,
@@ -277,6 +311,7 @@ def store_prediction_result(
                 float(event["actual_happiness_score"]),
                 predicted_score,
                 prediction_error,
+                is_test_set,
                 event_time_dt,
             ),
         )
@@ -317,17 +352,18 @@ def run_consumer(
     model_pipeline = load_serialized_model(MODEL_PATH)
     ensure_topic_exists(bootstrap_servers, TOPIC_NAME)
 
+    # Manual offset commit (enable.auto.commit=False) prevents message loss if DB fails
     consumer = Consumer({
         "bootstrap.servers": bootstrap_servers,
         "group.id": CONSUMER_GROUP,
         "auto.offset.reset": "earliest",
-        "enable.auto.commit": True,
+        "enable.auto.commit": False,
     })
     consumer.subscribe([TOPIC_NAME])
 
     print(
         f"[Consumer] Listening on topic '{TOPIC_NAME}' with group '{CONSUMER_GROUP}' "
-        f"(bootstrap={bootstrap_servers})..."
+        f"(bootstrap={bootstrap_servers}, manual offset commit enabled)..."
     )
 
     processed_total = 0
@@ -361,14 +397,19 @@ def run_consumer(
             event_key_str = key_bytes.decode("utf-8", errors="replace") if key_bytes else None
 
             # 1. Store raw incoming event BEFORE validation or prediction
-            raw_event_id = insert_raw_event_before_processing(
-                conn=conn,
-                topic=msg.topic(),
-                partition=msg.partition(),
-                offset=msg.offset(),
-                event_key=event_key_str,
-                raw_payload=raw_payload_str,
-            )
+            try:
+                raw_event_id = insert_raw_event_before_processing(
+                    conn=conn,
+                    topic=msg.topic(),
+                    partition=msg.partition(),
+                    offset=msg.offset(),
+                    event_key=event_key_str,
+                    raw_payload=raw_payload_str,
+                )
+            except Exception as db_exc:
+                conn.rollback()
+                print(f"[Consumer] Database error storing raw event (offset not committed): {db_exc}")
+                continue
 
             # 2. Validate against Event Contract
             status, parsed_event, error_msg = validate_event_contract(raw_payload_str)
@@ -384,6 +425,7 @@ def run_consumer(
                     event_time_iso=str(ev_time) if ev_time is not None else None,
                     validation_errors=error_msg,
                 )
+                consumer.commit(message=msg, asynchronous=False)
                 status_counts[status] = status_counts.get(status, 0) + 1
                 processed_total += 1
                 print(
@@ -394,8 +436,11 @@ def run_consumer(
                     break
                 continue
 
-            # 3. Prepare features in the exact training order & run inference
+            # 3. Prepare features, run inference & atomically persist VALID status + fact row
             try:
+                if parsed_event.get("simulate_prediction_error") is True:
+                    raise RuntimeError("Simulated model inference fault triggered via 'simulate_prediction_error=True'.")
+
                 features_df = pd.DataFrame(
                     [{feat: float(parsed_event[feat]) for feat in MODEL_FEATURES}],
                     columns=MODEL_FEATURES,
@@ -403,38 +448,32 @@ def run_consumer(
                 predicted_score = round(float(model_pipeline.predict(features_df)[0]), 6)
                 actual_score = float(parsed_event["actual_happiness_score"])
                 prediction_error = round(abs(actual_score - predicted_score), 6)
+
+                commit_valid_prediction_transaction(
+                    conn=conn,
+                    raw_event_id=raw_event_id,
+                    event=parsed_event,
+                    predicted_score=predicted_score,
+                    prediction_error=prediction_error,
+                )
+                consumer.commit(message=msg, asynchronous=False)
             except Exception as pred_exc:
+                conn.rollback()
                 update_raw_event_status(
                     conn=conn,
                     raw_event_id=raw_event_id,
                     status="PREDICTION_ERROR",
-                    event_id=parsed_event["event_id"],
-                    event_time_iso=parsed_event["event_time"],
-                    validation_errors=f"Inference failure: {pred_exc}",
+                    event_id=str(parsed_event.get("event_id")),
+                    event_time_iso=str(parsed_event.get("event_time")),
+                    validation_errors=f"Inference/Persistence failure: {pred_exc}",
                 )
+                consumer.commit(message=msg, asynchronous=False)
                 status_counts["PREDICTION_ERROR"] += 1
                 processed_total += 1
-                print(f"[Consumer] Prediction error on raw_event_id={raw_event_id}: {pred_exc}")
+                print(f"[Consumer] Logged PREDICTION_ERROR on raw_event_id={raw_event_id}: {pred_exc}")
                 if max_messages and processed_total >= max_messages:
                     break
                 continue
-
-            # 4. Mark raw event VALID and persist prediction in PostgreSQL
-            update_raw_event_status(
-                conn=conn,
-                raw_event_id=raw_event_id,
-                status="VALID",
-                event_id=parsed_event["event_id"],
-                event_time_iso=parsed_event["event_time"],
-                validation_errors=None,
-            )
-            store_prediction_result(
-                conn=conn,
-                raw_event_id=raw_event_id,
-                event=parsed_event,
-                predicted_score=predicted_score,
-                prediction_error=prediction_error,
-            )
 
             status_counts["VALID"] += 1
             processed_total += 1
@@ -487,4 +526,3 @@ if __name__ == "__main__":
         max_messages=args.max_messages,
         idle_timeout=args.idle_timeout,
     )
-

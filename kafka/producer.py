@@ -52,7 +52,7 @@ def ensure_topic_exists(bootstrap_servers: str, topic_name: str = TOPIC_NAME) ->
 
 def build_event_payload(row: pd.Series, index_num: int) -> dict:
     """Build the JSON event matching the required Part B Event Contract."""
-    return {
+    payload = {
         "event_id": f"E{index_num:03d}",
         "country": str(row["country"]).strip(),
         "year": int(row["year"]),
@@ -65,14 +65,20 @@ def build_event_payload(row: pd.Series, index_num: int) -> dict:
         "actual_happiness_score": round(float(row["happiness_score"]), 6),
         "event_time": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
     }
+    if "is_test_set" in row:
+        payload["is_test_set"] = bool(row["is_test_set"])
+    return payload
 
 
 def get_invalid_test_events() -> list[tuple[str, str]]:
     """
-    Sample malformed events to test consumer Event Contract validation:
+    Sample malformed/faulty events to test consumer Event Contract validation & error handling:
     1. INVALID_SCHEMA: missing model features ('health', 'freedom') and wrong type for 'gdp'.
     2. INVALID_VALUES: negative 'gdp' (-1.5) and out-of-range 'actual_happiness_score' (99.9).
     3. INVALID_SCHEMA: malformed raw JSON string.
+    4. PREDICTION_ERROR: valid contract schema/values but includes a fault-injection flag
+       ('simulate_prediction_error': True) to verify that runtime inference errors are
+       caught, logged as PREDICTION_ERROR in raw_happiness_events, and do not crash the consumer.
     """
     now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     invalid_schema_event = json.dumps({
@@ -100,10 +106,25 @@ def get_invalid_test_events() -> list[tuple[str, str]]:
         "event_time": now_iso,
     })
     malformed_json_event = '{"event_id": "E_MALFORMED_JSON", "country": "Peru", BROKEN_JSON'
+    prediction_error_event = json.dumps({
+        "event_id": "E_SIM_PRED_ERROR_01",
+        "country": "Colombia",
+        "year": 2019,
+        "gdp": 1.0,
+        "family": 1.2,
+        "health": 0.8,
+        "freedom": 0.5,
+        "generosity": 0.2,
+        "corruption": 0.1,
+        "actual_happiness_score": 6.1,
+        "event_time": now_iso,
+        "simulate_prediction_error": True,
+    })
     return [
         ("Colombia", invalid_schema_event),
         ("Colombia", invalid_values_event),
         ("Peru", malformed_json_event),
+        ("Colombia", prediction_error_event),
     ]
 
 
@@ -164,8 +185,9 @@ def run_producer(
                 time.sleep(delay)
 
         if inject_invalid:
-            print("[Producer] Injecting 3 test invalid events to verify consumer resilience...")
-            for country_key, raw_str in get_invalid_test_events():
+            invalid_events = get_invalid_test_events()
+            print(f"[Producer] Injecting {len(invalid_events)} test invalid/fault events to verify consumer resilience...")
+            for country_key, raw_str in invalid_events:
                 producer.produce(
                     topic=TOPIC_NAME,
                     key=country_key.encode("utf-8"),
@@ -210,7 +232,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--inject-invalid",
         action="store_true",
-        help="Also publish 3 malformed events (INVALID_SCHEMA / INVALID_VALUES) to verify contract validation",
+        help="Also publish 4 test events (INVALID_SCHEMA, INVALID_VALUES, PREDICTION_ERROR) to verify contract & error handling",
     )
     return parser.parse_args()
 
@@ -224,4 +246,3 @@ if __name__ == "__main__":
         limit=args.limit,
         inject_invalid=args.inject_invalid,
     )
-

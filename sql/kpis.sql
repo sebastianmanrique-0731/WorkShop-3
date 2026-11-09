@@ -4,10 +4,15 @@
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- KPI 1: Average Prediction Error (Global Model Performance Metrics in Stream)
--- Calculates global MAE, RMSE, Min/Max error, and average actual vs predicted.
+-- KPI 1A: Average Prediction Error (Global & Split by Train 70% vs Test 30%)
+-- Shows overall MAE/RMSE alongside strict out-of-sample Test (30%) MAE/RMSE.
 -- ----------------------------------------------------------------------------
 SELECT
+    CASE
+        WHEN GROUPING(is_test_set) = 1 THEN 'ALL EVENTS (100%)'
+        WHEN is_test_set = TRUE THEN 'TEST SET ONLY (30% Out-of-Sample)'
+        ELSE 'TRAIN SET ONLY (70% In-Sample)'
+    END AS evaluation_subset,
     COUNT(prediction_id) AS total_predictions,
     ROUND(AVG(actual_score)::NUMERIC, 4) AS avg_actual_score,
     ROUND(AVG(predicted_score)::NUMERIC, 4) AS avg_predicted_score,
@@ -15,7 +20,9 @@ SELECT
     ROUND(SQRT(AVG(POWER(actual_score - predicted_score, 2)))::NUMERIC, 4) AS rmse_error,
     ROUND(MIN(prediction_error)::NUMERIC, 4) AS min_error,
     ROUND(MAX(prediction_error)::NUMERIC, 4) AS max_error
-FROM fact_predictions;
+FROM fact_predictions
+GROUP BY ROLLUP(is_test_set)
+ORDER BY GROUPING(is_test_set) DESC, is_test_set DESC;
 
 
 -- ----------------------------------------------------------------------------
@@ -46,6 +53,7 @@ SELECT
     fp.event_id,
     dc.country_name AS country,
     dd.observation_year AS year,
+    CASE WHEN fp.is_test_set THEN 'Test (30%)' ELSE 'Train (70%)' END AS dataset_split,
     ROUND(fp.actual_score::NUMERIC, 4) AS actual_score,
     ROUND(fp.predicted_score::NUMERIC, 4) AS predicted_score,
     ROUND((fp.actual_score - fp.predicted_score)::NUMERIC, 4) AS signed_residual,
@@ -77,7 +85,7 @@ ORDER BY dd.observation_year ASC;
 
 -- ----------------------------------------------------------------------------
 -- KPI 4B: Streaming Prediction Trends Over Time (By Ingestion / Event Timestamp)
--- Tracks real-time throughput and average prediction error per streaming minute/second.
+-- Tracks real-time throughput and average prediction error per streaming window.
 -- ----------------------------------------------------------------------------
 SELECT
     DATE_TRUNC('second', fp.prediction_timestamp) AS stream_window,
@@ -92,7 +100,8 @@ ORDER BY stream_window ASC;
 
 -- ----------------------------------------------------------------------------
 -- KPI 5 (Audit & Traceability): Raw Event Contract Validation Breakdown
--- Verifies how many Kafka events passed validation vs failed contract rules.
+-- Verifies how many Kafka events passed validation vs failed (VALID, INVALID_SCHEMA,
+-- INVALID_VALUES, PREDICTION_ERROR).
 -- ----------------------------------------------------------------------------
 SELECT
     processing_status,
@@ -116,6 +125,7 @@ SELECT
     r.processing_status,
     dc.country_name AS country,
     dd.observation_year AS year,
+    fp.is_test_set,
     fp.actual_score,
     fp.predicted_score,
     fp.prediction_error,
@@ -126,4 +136,3 @@ JOIN dim_country dc ON fp.country_id = dc.country_id
 JOIN dim_date dd ON fp.date_id = dd.date_id
 ORDER BY fp.prediction_id DESC
 LIMIT 20;
-
