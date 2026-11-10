@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Workshop 3 — Streaming ETL con Apache Kafka y Machine Learning</title>
+  <style>
+    :root {
+      --bg-dark: #0b1120;
+      --bg-card: #131c31;
+      --bg-card-alt: #1a2642;
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --accent-cyan: #06b6d4;
+      --accent-blue: #3b82f6;
+      --accent-green: #10b981;
+      --accent-orange: #f97316;
+      --accent-pink: #ec4899;
+      --border: rgba(148, 163, 184, 0.16);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at top right, #172554, var(--bg-dark) 60%);
+      color: var(--text-main);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top Progress & Header */
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 36px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(11, 17, 32, 0.85);
+      backdrop-filter: blur(8px);
+      z-index: 10;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 700;
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      letter-spacing: 0.4px;
+    }
+
+    .brand span.badge {
+      background: rgba(6, 182, 212, 0.15);
+      color: var(--accent-cyan);
+      border: 1px solid rgba(6, 182, 212, 0.35);
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+    }
+
+    .slide-counter {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    /* Deck Container */
+    .deck {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .slide {
+      position: absolute;
+      inset: 0;
+      padding: 36px 64px;
+      opacity: 0;
+      transform: translateX(40px);
+      pointer-events: none;
+      transition: opacity 0.35s ease, transform 0.35s ease;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      max-width: 1400px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .slide.active {
+      opacity: 1;
+      transform: translateX(0);
+      pointer-events: auto;
+    }
+
+    /* Typography */
+    .part-tag {
+      display: inline-block;
+      align-self: flex-start;
+      padding: 5px 14px;
+      border-radius: 999px;
+      font-size: 0.82rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 12px;
+    }
+
+    .tag-intro { background: rgba(59, 130, 246, 0.18); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.35); }
+    .tag-part-a { background: rgba(6, 182, 212, 0.18); color: #22d3ee; border: 1px solid rgba(6, 182, 212, 0.35); }
+    .tag-part-b { background: rgba(249, 115, 22, 0.18); color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.35); }
+    .tag-part-c { background: rgba(16, 185, 129, 0.18); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35); }
+    .tag-bi { background: rgba(236, 72, 153, 0.18); color: #f472b6; border: 1px solid rgba(236, 72, 153, 0.35); }
+
+    h1 {
+      font-size: 2.8rem;
+      line-height: 1.18;
+      margin-bottom: 18px;
+      background: linear-gradient(90deg, #ffffff, #7dd3fc);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    h2 {
+      font-size: 2rem;
+      margin-bottom: 10px;
+      color: #ffffff;
+    }
+
+    p.lead {
+      font-size: 1.12rem;
+      color: var(--text-muted);
+      line-height: 1.55;
+      margin-bottom: 24px;
+      max-width: 920px;
+    }
+
+    /* Layouts */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      align-items: stretch;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+
+    .split-img {
+      display: grid;
+      grid-template-columns: 1.05fr 1.35fr;
+      gap: 28px;
+      align-items: center;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 22px 24px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+    }
+
+    .card h3 {
+      font-size: 1.12rem;
+      color: var(--accent-cyan);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card p, .card li {
+      font-size: 0.98rem;
+      color: #cbd5e1;
+      line-height: 1.55;
+    }
+
+    .card ul {
+      padding-left: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    /* Metric Boxes */
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .kpi-box {
+      background: var(--bg-card-alt);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 18px;
+      text-align: center;
+    }
+
+    .kpi-box .val {
+      font-size: 1.85rem;
+      font-weight: 800;
+      color: var(--accent-cyan);
+      margin-bottom: 4px;
+    }
+
+    .kpi-box .lbl {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    /* Images */
+    .img-frame {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 10px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+    }
+
+    .img-frame img {
+      max-width: 100%;
+      max-height: 56vh;
+      border-radius: 8px;
+      object-fit: contain;
+      cursor: zoom-in;
+      transition: transform 0.2s ease;
+    }
+
+    .img-frame img:hover {
+      transform: scale(1.015);
+    }
+
+    /* Tables */
+    table.clean-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      font-size: 0.94rem;
+    }
+
+    table.clean-table th, table.clean-table td {
+      padding: 10px 14px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    table.clean-table th {
+      color: var(--accent-cyan);
+      font-weight: 600;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    table.clean-table tr.highlight {
+      background: rgba(6, 182, 212, 0.12);
+      font-weight: 600;
+    }
+
+    code {
+      background: rgba(255, 255, 255, 0.08);
+      color: #67e8f9;
+      padding: 2px 6px;
+      border-radius: 5px;
+      font-family: Consolas, monospace;
+      font-size: 0.9em;
+    }
+
+    /* Dashboard Tabs inside Slide 9 */
+    .bi-tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    .bi-tab-btn {
+      background: var(--bg-card);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+
+    .bi-tab-btn.active {
+      background: var(--accent-cyan);
+      color: #0b1120;
+      border-color: var(--accent-cyan);
+    }
+
+    .bi-panel {
+      display: none;
+    }
+
+    .bi-panel.active {
+      display: grid;
+      grid-template-columns: 0.95fr 1.45fr;
+      gap: 24px;
+      align-items: center;
+    }
+
+    /* Footer Controls */
+    .bottom-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 36px;
+      border-top: 1px solid var(--border);
+      background: rgba(11, 17, 32, 0.85);
+      z-index: 10;
+    }
+
+    .dots {
+      display: flex;
+      gap: 8px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: rgba(148, 163, 184, 0.3);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .dot.active {
+      width: 26px;
+      border-radius: 999px;
+      background: var(--accent-cyan);
+    }
+
+    .nav-btns {
+      display: flex;
+      gap: 10px;
+    }
+
+    button.ctrl-btn {
+      background: var(--bg-card-alt);
+      color: var(--text-main);
+      border: 1px solid var(--border);
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.9rem;
+      transition: background 0.2s;
+    }
+
+    button.ctrl-btn:hover {
+      background: var(--accent-blue);
+      border-color: var(--accent-blue);
+    }
+
+    /* Lightbox Modal */
+    .lightbox {
+      position: fixed;
+      inset: 0;
+      background: rgba(5, 10, 20, 0.92);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 100;
+      padding: 24px;
+      cursor: zoom-out;
+    }
+
+    .lightbox.open {
+      display: flex;
+    }
+
+    .lightbox img {
+      max-width: 95vw;
+      max-height: 92vh;
+      border-radius: 10px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="top-bar">
+    <div class="brand">
+      <span class="badge">ETL · Workshop 3</span>
+      <span>Streaming ETL with Apache Kafka & Machine Learning</span>
+    </div>
+    <div class="slide-counter" id="slideCounter">1 / 9</div>
+  </header>
+
+  <!-- Slides Deck -->
+  <main class="deck">
+
+    <!-- SLIDE 1: Portada & Objetivo -->
+    <section class="slide active">
+      <span class="part-tag tag-intro">Introducción y Objetivo</span>
+      <h1>Streaming ETL con Apache Kafka y Machine Learning</h1>
+      <p class="lead">
+        Transición de un pipeline tradicional por lotes (Batch) hacia una arquitectura orientada a eventos en tiempo real usando los datos históricos del <strong>World Happiness Report (2015–2019)</strong>.
+      </p>
+
+      <div class="grid-3">
+        <div class="card">
+          <h3>1. Parte A · Offline (Batch & ML)</h3>
+          <p>Exploración, limpieza y unificación de 5 archivos CSV con esquemas distintos para entrenar y serializar un modelo de regresión (<code>model.pkl</code>).</p>
+        </div>
+        <div class="card">
+          <h3>2. Parte B · Streaming (Kafka)</h3>
+          <p>Simulación de eventos en tiempo real con un Producer y un Consumer en Python que valida un contrato de eventos antes de predecir.</p>
+        </div>
+        <div class="card">
+          <h3>3. Parte C · Analítica (Postgres + BI)</h3>
+          <p>Almacenamiento crudo para auditoría, modelo dimensional en estrella para predicciones y dashboard conectado directo a PostgreSQL.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- SLIDE 2: Arquitectura General -->
+    <section class="slide">
+      <span class="part-tag tag-intro">Arquitectura End-to-End</span>
+      <h2>Flujo General del Proyecto</h2>
+      <p class="lead">
+        El mismo preprocesamiento aprendido en el entrenamiento offline se reutiliza intacto dentro del consumidor de Kafka para garantizar consistencia. <em>(Haz clic en la imagen para ampliarla)</em>.
+      </p>
+      <div class="img-frame">
+        <img src="imagenes/architecture.jpg" alt="Arquitectura General del Pipeline" onclick="openLightbox(this.src)" />
+      </div>
+    </section>
+
+    <!-- SLIDE 3: Parte A - EDA y Limpieza -->
+    <section class="slide">
+      <span class="part-tag tag-part-a">Parte A · Steps 1 & 2</span>
+      <h2>Exploración (EDA), Limpieza y Armonización</h2>
+      <p class="lead">
+        Los 5 archivos CSV (2015 a 2019) tenían entre 9 y 13 columnas con nombres distintos. Se integraron en un esquema único de 9 variables.
+      </p>
+
+      <div class="kpi-row">
+        <div class="kpi-box">
+          <div class="val">782</div>
+          <div class="lbl">Registros Integrados (2015–2019)</div>
+        </div>
+        <div class="kpi-box">
+          <div class="val">164</div>
+          <div class="lbl">Países Estandarizados (de 170)</div>
+        </div>
+        <div class="kpi-box">
+          <div class="val">1</div>
+          <div class="lbl">Valor Nulo Imputado (UAE 2018)</div>
+        </div>
+        <div class="kpi-box">
+          <div class="val">0</div>
+          <div class="lbl">Filas Duplicadas</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>Hallazgos Clave del EDA</h3>
+          <ul>
+            <li><strong>Diferencias de esquema:</strong> Columnas con espacios/paréntesis en 2015–2016, puntos en 2017 y nombres nuevos en 2018–2019.</li>
+            <li><strong>Único valor faltante:</strong> <code>corruption</code> en <em>United Arab Emirates (2018)</em>, imputado con el promedio histórico del mismo país (<code>0.312</code>).</li>
+            <li><strong>Outliers reales:</strong> Valores altos en confianza institucional o generosidad se conservaron porque representan la realidad de esos países.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Decisiones de Armonización</h3>
+          <ul>
+            <li><strong>Normalización de países:</strong> Se unificaron 6 nombres variantes (ej. <em>Taiwan Province of China</em> → <em>Taiwan</em>, <em>Trinidad & Tobago</em> → <em>Trinidad and Tobago</em>) para no partir llaves en Kafka ni en la base de datos.</li>
+            <li><strong>Esquema final:</strong> <code>country</code>, <code>year</code>, <code>gdp</code>, <code>family</code>, <code>health</code>, <code>freedom</code>, <code>generosity</code>, <code>corruption</code> y <code>happiness_score</code>.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- SLIDE 4: Parte A - Feature Engineering & Modelo ML -->
+    <section class="slide">
+      <span class="part-tag tag-part-a">Parte A · Steps 3 & 4</span>
+      <h2>Feature Engineering y Entrenamiento del Modelo</h2>
+      <p class="lead">
+        El enfoque del taller es la integración limpia del pipeline: seleccionamos las 6 variables socioeconómicas y evitamos cualquier fuga de datos (<em>Target Leakage</em>).
+      </p>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>Selección de Variables y Prevención de Leakage</h3>
+          <ul>
+            <li><strong>6 Features predictores:</strong> <code>gdp</code> (r = 0.79), <code>health</code> (r = 0.74), <code>family</code> (r = 0.65), <code>freedom</code> (r = 0.55), <code>corruption</code> (r = 0.40) y <code>generosity</code> (r = 0.14).</li>
+            <li><strong>Sin Target Leakage:</strong> Se descartaron <code>Dystopia Residual</code>, <code>Happiness Rank</code> e intervalos de confianza porque matemáticamente contienen la respuesta.</li>
+            <li><strong>Pipeline Serializado:</strong> Se guardó <code>SimpleImputer</code> + <code>StandardScaler</code> + Modelo dentro de <code>models/model.pkl</code>.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3>Evaluación (Split 70% Train / 30% Test)</h3>
+          <p style="margin-bottom: 10px;">Comparación en el conjunto de prueba (235 registros no vistos):</p>
+          <table class="clean-table">
+            <thead>
+              <tr>
+                <th>Modelo</th>
+                <th>MAE</th>
+                <th>RMSE</th>
+                <th>R²</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="highlight">
+                <td>Random Forest Regressor (Elegido)</td>
+                <td>0.4071</td>
+                <td>0.5213</td>
+                <td>0.7823</td>
+              </tr>
+              <tr>
+                <td>Linear Regression</td>
+                <td>0.4487</td>
+                <td>0.5846</td>
+                <td>0.7263</td>
+              </tr>
+              <tr>
+                <td>Decision Tree Regressor</td>
+                <td>0.5205</td>
+                <td>0.6703</td>
+                <td>0.6401</td>
+              </tr>
+            </tbody>
+          </table>
+          <p style="margin-top: 12px; font-size: 0.88rem; color: var(--text-muted);">
+            *Se etiquetó cada fila con <code>is_test_set</code> para distinguir en el dashboard el error de prueba (0.407) del global (0.219).
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- SLIDE 5: Parte B - Kafka Producer & Event Contract -->
+    <section class="slide">
+      <span class="part-tag tag-part-b">Parte B · Step 5 & Event Contract</span>
+      <h2>Streaming con Apache Kafka y Contrato de Eventos</h2>
+      <p class="lead">
+        El Producer lee los registros históricos uno por uno y los publica como eventos JSON simulando llegada en tiempo real.
+      </p>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>Configuración del Producer</h3>
+          <ul>
+            <li><strong>Tópico:</strong> <code>happiness-events</code> con <strong>3 particiones</strong> y factor de replicación 1 (en Docker).</li>
+            <li><strong>Event Key:</strong> Se usa <code>country</code> como llave para que todos los eventos de un mismo país vayan siempre a la misma partición.</li>
+            <li><strong>Simulación:</strong> Delay configurable entre mensajes e inyección de 4 eventos de prueba con fallos (<code>--inject-invalid</code>).</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3>Contrato de Eventos (Event Contract)</h3>
+          <ul>
+            <li><code>event_id</code> y <code>country</code>: Strings obligatorios no vacíos.</li>
+            <li><code>year</code>: Entero válido entre 1900 y 2100.</li>
+            <li><strong>6 Features del modelo:</strong> Números finitos entre <code>0.0</code> y <code>10.0</code>.</li>
+            <li><code>actual_happiness_score</code>: Usado <strong>solo para evaluar el error</strong>, nunca entra como feature al modelo.</li>
+            <li><code>event_time</code>: Timestamp en formato ISO-8601.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- SLIDE 6: Parte B - Kafka Consumer & Resiliencia -->
+    <section class="slide">
+      <span class="part-tag tag-part-b">Parte B · Step 6</span>
+      <h2>Kafka Consumer e Inferencia en Tiempo Real</h2>
+      <p class="lead">
+        El Consumer (grupo <code>happiness-ml-team</code>) garantiza trazabilidad completa y tolerancia a fallos sin detener el pipeline.
+      </p>
+
+      <div class="grid-4">
+        <div class="card">
+          <h3>1. Guardar en Crudo</h3>
+          <p>Todo mensaje que llega de Kafka se guarda <strong>primero</strong> en <code>raw_happiness_events</code> antes de validar o transformar.</p>
+        </div>
+        <div class="card">
+          <h3>2. Validar Contrato</h3>
+          <p>Si un mensaje tiene campos faltantes o valores fuera de rango, se marca como inválido en la tabla raw y se salta sin tumbar el proceso.</p>
+        </div>
+        <div class="card">
+          <h3>3. Predecir con ML</h3>
+          <p>Ordena los 6 features igual que en el entrenamiento, aplica <code>model.pkl</code> y calcula el error frente al score real.</p>
+        </div>
+        <div class="card">
+          <h3>4. Transacción Segura</h3>
+          <p>Actualiza el estado a <code>VALID</code> e inserta la predicción en una sola transacción SQL antes de confirmar el offset en Kafka.</p>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top: 20px;">
+        <h3>Estados de Auditoría Soportados en <code>raw_happiness_events</code></h3>
+        <p>
+          • <code>VALID</code> (782 eventos procesados con éxito) &nbsp;|&nbsp;
+          • <code>INVALID_SCHEMA</code> (2 eventos con JSON roto o columnas faltantes) &nbsp;|&nbsp;
+          • <code>INVALID_VALUES</code> (1 evento con números negativos/fuera de rango) &nbsp;|&nbsp;
+          • <code>PREDICTION_ERROR</code> (1 evento de fallo simulado en inferencia).
+        </p>
+      </div>
+    </section>
+
+    <!-- SLIDE 7: Parte C - Diseño de Base de Datos -->
+    <section class="slide">
+      <span class="part-tag tag-part-c">Parte C · Steps 7 & 8</span>
+      <h2>Modelo Dimensional en PostgreSQL</h2>
+      <p class="lead">
+        Diseño en estrella con tabla de hechos (<code>fact_predictions</code>), dimensiones (<code>dim_country</code>, <code>dim_date</code>) y tabla staging de trazabilidad (<code>raw_happiness_events</code>).
+      </p>
+
+      <div class="split-img">
+        <div class="card">
+          <h3>Estructura y Linaje de Datos</h3>
+          <ul>
+            <li><strong><code>raw_happiness_events</code> (786 filas):</strong> Guarda el JSON exacto recibido de Kafka, partición, offset y estado de validación.</li>
+            <li><strong><code>fact_predictions</code> (782 filas):</strong> Guarda <code>actual_score</code>, <code>predicted_score</code>, <code>prediction_error</code> y se enlaza al evento original mediante <code>raw_event_id</code>.</li>
+            <li><strong><code>dim_country</code> (164 países) y <code>dim_date</code> (5 años):</strong> Dimensiones normalizadas e idempotentes para consultas analíticas y vistas de Power BI.</li>
+          </ul>
+        </div>
+        <div class="img-frame">
+          <img src="imagenes/dimensional_model.png" alt="Modelo Dimensional PostgreSQL" onclick="openLightbox(this.src)" />
+        </div>
+      </div>
+    </section>
+
+    <!-- SLIDE 8: Parte C - Galería Interactiva de Dashboards Power BI -->
+    <section class="slide">
+      <span class="part-tag tag-bi">Parte C · Step 9 · Power BI</span>
+      <h2>Dashboards y KPIs Conectados a PostgreSQL</h2>
+
+      <div class="bi-tabs">
+        <button class="bi-tab-btn active" onclick="showBiTab(0)">1. Error de Predicción</button>
+        <button class="bi-tab-btn" onclick="showBiTab(1)">2. Predicho vs Real</button>
+        <button class="bi-tab-btn" onclick="showBiTab(2)">3. Análisis por País</button>
+        <button class="bi-tab-btn" onclick="showBiTab(3)">4. Tendencias (2015–2019)</button>
+        <button class="bi-tab-btn" onclick="showBiTab(4)">5. Salud del Pipeline Kafka</button>
+      </div>
+
+      <!-- Tab 1 -->
+      <div class="bi-panel active">
+        <div class="card">
+          <h3>KPI 1 · Error Promedio de Predicción</h3>
+          <ul>
+            <li><strong>MAE Test (30%):</strong> <code>0.407</code> (cumple holgadamente la meta <code>&lt; 0.50</code>).</li>
+            <li><strong>MAE Global (782 eventos):</strong> <code>0.219</code> combinando entrenamiento y prueba.</li>
+            <li><strong>R² en Test:</strong> <code>0.782</code> (explica el 78.2% de la varianza con 6 indicadores).</li>
+            <li>El gráfico de barras muestra consistencia del error entre 2015 y 2019.</li>
+          </ul>
+        </div>
+        <div class="img-frame">
+          <img src="dashboards/Happines- Error de prediccion.png" alt="Dashboard 1 - Error de predicción" onclick="openLightbox(this.src)" />
+        </div>
+      </div>
+
+      <!-- Tab 2 -->
+      <div class="bi-panel">
+        <div class="card">
+          <h3>KPI 3 · Predicho vs. Real y Residuos</h3>
+          <ul>
+            <li><strong>Alineación lineal:</strong> Fuerte ajuste entre el puntaje real y el predicho a lo largo de toda la escala (3 a 8).</li>
+            <li><strong>Modelo sin sesgo (Bias = -0.001):</strong> Los residuos se distribuyen simétricamente alrededor de cero.</li>
+            <li><strong>Precisión:</strong> El <code>69.4%</code> de las predicciones de prueba tienen un error menor o igual a 0.5 puntos.</li>
+          </ul>
+        </div>
+        <div class="img-frame">
+          <img src="dashboards/Predicho vs Real.png" alt="Dashboard 2 - Predicho vs Real" onclick="openLightbox(this.src)" />
+        </div>
+      </div>
+
+      <!-- Tab 3 -->
+      <div class="bi-panel">
+        <div class="card">
+          <h3>KPI 2 · Predicciones por País</h3>
+          <ul>
+            <li><strong>Cobertura global:</strong> Mapa interactivo con los 164 países de <code>dim_country</code>.</li>
+            <li><strong>Más difíciles de predecir:</strong> Países como <em>Botswana</em>, <em>Tanzania</em> o <em>Costa Rica</em> donde la felicidad subjetiva difiere de lo que proyecta solo el PIB.</li>
+            <li><strong>Mejor predichos:</strong> <em>Australia</em>, <em>Uruguay</em>, <em>España</em> y <em>Canadá</em> con MAE menor a <code>0.05</code>.</li>
+          </ul>
+        </div>
+        <div class="img-frame">
+          <img src="dashboards/Paises.png" alt="Dashboard 3 - Países" onclick="openLightbox(this.src)" />
+        </div>
+      </div>
+
+      <!-- Tab 4 -->
+      <div class="bi-panel">
+        <div class="card">
+          <h3>KPI 4 · Tendencias en el Tiempo</h3>
+          <ul>
+            <li><strong>Evolución 2015–2019:</strong> El promedio predicho sigue de cerca al promedio real año tras año (alrededor de 5.38).</li>
+            <li><strong>Mejora de calidad:</strong> El porcentaje de predicciones con error <code>&le; 0.5</code> sube de <code>86.8%</code> en 2015 a más de <code>90%</code> en 2018–2019.</li>
+          </ul>
+        </div>
+        <div class="img-frame">
+          <img src="dashboards/Tendencias.png" alt="Dashboard 4 - Tendencias" onclick="openLightbox(this.src)" />
+        </div>
+      </div>
+
+      <!-- Tab 5 -->
+      <div class="bi-panel">
+        <div class="card">
+          <h3>Auditoría · Salud del Pipeline Kafka</h3>
+          <ul>
+            <li><strong>786 eventos recibidos:</strong> 782 válidos (<code>99.5%</code>) y 4 eventos con problemas capturados en <code>raw_happiness_events</code>.</li>
+            <li><strong>Balanceo por partición:</strong> Distribución equilibrada en las 3 particiones usando <code>country</code> como llave.</li>
+            <li><strong>Throughput:</strong> Procesamiento sostenido de ~75 eventos por segundo en tiempo real.</li>
+          </ul>
+        </div>
+        <div class="img-frame">
+          <img src="dashboards/Salud del pipeline (Kafka).png" alt="Dashboard 5 - Salud del Pipeline Kafka" onclick="openLightbox(this.src)" />
+        </div>
+      </div>
+    </section>
+
+    <!-- SLIDE 9: Conclusiones -->
+    <section class="slide">
+      <span class="part-tag tag-part-c">Cierre y Conclusiones</span>
+      <h2>Conclusiones del Proyecto</h2>
+      <p class="lead">
+        Se construyó un pipeline de Streaming ETL confiable, reproducible y conectado de extremo a extremo desde los datos crudos hasta la visualización analítica.
+      </p>
+
+      <div class="grid-3">
+        <div class="card">
+          <h3>Consistencia Entrenamiento–Streaming</h3>
+          <p>Serializar el preprocesamiento y el modelo juntos en <code>model.pkl</code> evitó discrepancias al transformar eventos individuales en tiempo real.</p>
+        </div>
+        <div class="card">
+          <h3>Confiabilidad y Trazabilidad</h3>
+          <p>Guardar primero el evento crudo en <code>raw_happiness_events</code> y validar el contrato permitió aislar los 4 eventos fallidos sin detener el pipeline.</p>
+        </div>
+        <div class="card">
+          <h3>Analítica Lista para Negocio</h3>
+          <p>El esquema en estrella en PostgreSQL permitió consultar en Power BI tanto el desempeño del modelo como la salud operativa de Kafka.</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Bottom Navigation -->
+  <footer class="bottom-bar">
+    <div class="dots" id="dotsContainer"></div>
+    <div class="nav-btns">
+      <button class="ctrl-btn" onclick="prevSlide()">← Anterior</button>
+      <button class="ctrl-btn" onclick="nextSlide()">Siguiente →</button>
+      <button class="ctrl-btn" onclick="toggleFullScreen()" title="Pantalla completa">⛶ Pantalla Completa</button>
+    </div>
+  </footer>
+
+  <!-- Lightbox Modal for Zooming Images -->
+  <div class="lightbox" id="lightbox" onclick="closeLightbox()">
+    <img id="lightboxImg" src="" alt="Vista ampliada" />
+  </div>
+
+  <script>
+    const slides = document.querySelectorAll('.slide');
+    const counter = document.getElementById('slideCounter');
+    const dotsContainer = document.getElementById('dotsContainer');
+    let current = 0;
+
+    // Build navigation dots
+    slides.forEach((_, idx) => {
+      const dot = document.createElement('div');
+      dot.className = 'dot' + (idx === 0 ? ' active' : '');
+      dot.onclick = () => goToSlide(idx);
+      dotsContainer.appendChild(dot);
+    });
+
+    function updateDeck() {
+      slides.forEach((s, i) => s.classList.toggle('active', i === current));
+      document.querySelectorAll('.dot').forEach((d, i) => d.classList.toggle('active', i === current));
+      counter.textContent = `${current + 1} / ${slides.length}`;
+    }
+
+    function nextSlide() {
+      if (current < slides.length - 1) {
+        current++;
+        updateDeck();
+      }
+    }
+
+    function prevSlide() {
+      if (current > 0) {
+        current--;
+        updateDeck();
+      }
+    }
+
+    function goToSlide(idx) {
+      current = idx;
+      updateDeck();
+    }
+
+    // Dashboard tabs switcher inside Slide 8
+    function showBiTab(tabIndex) {
+      const btns = document.querySelectorAll('.bi-tab-btn');
+      const panels = document.querySelectorAll('.bi-panel');
+      btns.forEach((b, i) => b.classList.toggle('active', i === tabIndex));
+      panels.forEach((p, i) => p.classList.toggle('active', i === tabIndex));
+    }
+
+    // Lightbox zoom
+    function openLightbox(src) {
+      document.getElementById('lightboxImg').src = src;
+      document.getElementById('lightbox').classList.add('open');
+    }
+
+    function closeLightbox() {
+      document.getElementById('lightbox').classList.remove('open');
+    }
+
+    function toggleFullScreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen();
+      } else {
+        document.exitFullscreen();
+      }
+    }
+
+    // Keyboard navigation
+    document.addEventListener('keydown', (e) => {
+      if (document.getElementById('lightbox').classList.contains('open')) {
+        if (e.key === 'Escape') closeLightbox();
+        return;
+      }
+      if (e.key === 'ArrowRight' || e.key === ' ') {
+        e.preventDefault();
+        nextSlide();
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        prevSlide();
+      } else if (e.key === 'f' || e.key === 'F') {
+        toggleFullScreen();
+      }
+    });
+  </script>
+</body>
+</html>
+
